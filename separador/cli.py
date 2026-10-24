@@ -21,6 +21,9 @@ def criar_parser():
                    metavar="ARQUIVO|INÍCIO-FIM",
                    help="voz da pessoa desejada (5-30 s): um arquivo só com ela, ou um "
                         "intervalo da própria gravação, ex.: -r 10:00-14:45; pode repetir")
+    p.add_argument("-t", "--trecho", metavar="INÍCIO-FIM",
+                   help="processa só esse pedaço da gravação, ex.: --trecho 20:00-25:00 "
+                        "(os tempos de -r continuam contando do início do arquivo)")
     p.add_argument("-n", "--locutores", type=int, default=2,
                    help="quantas pessoas falam na gravação (padrão: 2)")
     p.add_argument("-l", "--locutor", type=int,
@@ -54,23 +57,29 @@ def criar_parser():
     return p
 
 
-def ler_referencias(parser, args, analise, sr):
+def ler_intervalo_ou_erro(parser, texto):
+    try:
+        return ler_intervalo(texto)
+    except ValueError as e:
+        parser.error(str(e))
+
+
+def ler_referencias(parser, args, sr):
     """Converte os valores de -r em sinais (arquivos ou intervalos da entrada)."""
     sinais = []
     for grupo in args.referencia:
         texto = " ".join(grupo)
-        try:
-            intervalo = ler_intervalo(texto)
-        except ValueError as e:
-            parser.error(str(e))
+        intervalo = ler_intervalo_ou_erro(parser, texto)
         if intervalo:
             ini, fim = intervalo
-            duracao = len(analise) / sr
-            if ini >= duracao:
-                parser.error(f"referência {texto!r} começa depois do fim do áudio "
-                             f"({duracao:.1f} s)")
-            sinais.append(analise[int(ini * sr) : int(fim * sr)])
-            print(f"Referência: trecho {texto} da entrada", file=sys.stderr)
+            sinal = audio.carregar(args.entrada, sr=sr, mono=True,
+                                   inicio=ini, duracao=fim - ini)[0][:, 0]
+            if len(sinal) < sr:
+                parser.error(f"referência {texto!r} tem menos de 1 s de áudio; o arquivo "
+                             f"tem {audio.duracao(args.entrada):.1f} s")
+            sinais.append(sinal)
+            print(f"Referência: trecho {texto} da entrada ({len(sinal) / sr:.0f} s)",
+                  file=sys.stderr)
             continue
         for item in grupo:
             if not Path(item).is_file():
@@ -122,9 +131,20 @@ def main(argv=None, separador=None):
     corrigir_entrada(parser, args)
     entrada = Path(args.entrada)
 
+    corte = {}
+    if args.trecho:
+        intervalo = ler_intervalo_ou_erro(parser, args.trecho)
+        if not intervalo:
+            parser.error(f"--trecho inválido: {args.trecho!r} (use INÍCIO-FIM, ex.: 20:00-25:00)")
+        corte = {"inicio": intervalo[0], "duracao": intervalo[1] - intervalo[0]}
+
     print(f"Carregando {entrada}...", file=sys.stderr)
-    analise, sr_a = audio.carregar(entrada, sr=audio.SR_ANALISE, mono=True)
-    refs = ler_referencias(parser, args, analise[:, 0], sr_a)
+    analise, sr_a = audio.carregar(entrada, sr=audio.SR_ANALISE, mono=True, **corte)
+    print(f"  {len(analise) / sr_a / 60:.1f} min de áudio", file=sys.stderr)
+    if len(analise) < sr_a:
+        parser.error(f"menos de 1 s de áudio para processar; o arquivo tem "
+                     f"{audio.duracao(entrada):.1f} s")
+    refs = ler_referencias(parser, args, sr_a)
 
     print(f"Carregando modelo '{args.modelo}'...", file=sys.stderr)
     embedder = embeddings.criar(args.modelo, args.dispositivo)
@@ -180,7 +200,7 @@ def main(argv=None, separador=None):
         separados = sobreposicao.separar_regioes(
             analise[:, 0], sr_a, regioes, separador, embedder, progresso)
 
-    original, sr_o = audio.carregar(entrada)
+    original, sr_o = audio.carregar(entrada, **corte)
     for k in alvos:
         escolhas = None
         if separados:

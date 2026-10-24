@@ -76,3 +76,18 @@ def test_referencia_por_intervalo(tmp_path):
         n = min(len(out) // q, len(verdade))
         energia = (out[: n * q] ** 2).reshape(n, q).mean(1)
         assert energia[verdade[:n] == 0].mean() > 50 * energia[verdade[:n] == 1].mean()
+
+
+def test_trecho_processa_so_um_pedaco(tmp_path):
+    sinal, verdade, _ = podcast(semente=4)
+    sf.write(tmp_path / "pod.wav", sinal, SR)
+    saida = tmp_path / "x.wav"
+    # Referência (0:00-0:02) fora do trecho processado: lida direto do arquivo.
+    cli.main([str(tmp_path / "pod.wav"), "-r", "0:00-0:02", "--trecho", "0:10-0:30",
+              "-o", str(saida), "--modelo", "mfcc"])
+    out = sf.read(saida)[0]
+    assert abs(len(out) - 20 * SR) < SR // 100
+    q = SR // 100
+    v = verdade[1000:3000]
+    energia = (out[: len(v) * q] ** 2).reshape(len(v), q).mean(1)
+    assert energia[v == 0].mean() > 50 * energia[v == 1].mean()

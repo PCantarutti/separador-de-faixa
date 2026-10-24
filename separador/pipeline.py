@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 import numpy as np
-from sklearn.cluster import AgglomerativeClustering
 
 from .vad import QUADRO_S, detectar_fala, trechos
 
@@ -56,26 +55,62 @@ def janelas_referencia(sinais, sr, janela_s, passo_s):
     return todas
 
 
-def agrupar(embs, n_locutores, max_janelas=4000, semente=0):
+def agrupar(embs, n_locutores, ref=None, n_inicios=10, iteracoes=50, semente=0):
+    """K-means esférico (similaridade de cosseno) sobre as impressões vocais.
+
+    Com `ref`, um dos grupos começa na referência e os demais nas janelas menos
+    parecidas com ela, o que ancora a separação nas vozes e impede que um punhado
+    de janelas atípicas (vinheta, risadas, ruído) forme um grupo sozinho.
+    """
     if len(embs) < n_locutores:
         return np.zeros(len(embs), dtype=int)
-    # O agrupamento hierárquico usa memória quadrática; em episódios longos ele roda
-    # numa amostra e as demais janelas vão para o centróide mais próximo.
-    amostra = embs
-    if len(embs) > max_janelas:
-        idx = np.random.default_rng(semente).choice(len(embs), max_janelas, replace=False)
-        amostra = embs[idx]
-    modelo = AgglomerativeClustering(n_clusters=n_locutores, metric="cosine", linkage="average")
-    rotulos = modelo.fit_predict(amostra)
-    # Uma passada de refinamento estilo k-means com os centróides obtidos.
-    centroides = _centroides(amostra, rotulos, n_locutores)
-    return np.argmax(embs @ centroides.T, axis=1)
+    rng = np.random.default_rng(semente)
+    if ref is not None:
+        sim = embs @ ref
+        distantes = embs[sim <= np.quantile(sim, 0.3)]
+        iniciais = [_kmeans_mais_mais(distantes, n_locutores - 1, rng, [ref])]
+    else:
+        iniciais = [_kmeans_mais_mais(embs, n_locutores, rng) for _ in range(n_inicios)]
+
+    melhor, melhor_pont = None, -np.inf
+    for centroides in iniciais:
+        for _ in range(iteracoes):
+            rotulos = np.argmax(embs @ centroides.T, axis=1)
+            novos = _centroides(embs, rotulos, n_locutores, centroides)
+            if np.allclose(novos, centroides):
+                break
+            centroides = novos
+        pont = np.max(embs @ centroides.T, axis=1).sum()
+        if pont > melhor_pont:
+            melhor, melhor_pont = rotulos, pont
+    return melhor
 
 
-def _centroides(embs, rotulos, n):
-    c = np.stack([embs[rotulos == k].mean(0) if np.any(rotulos == k) else np.zeros(embs.shape[1])
-                  for k in range(n)])
-    return c / (np.linalg.norm(c, axis=1, keepdims=True) + 1e-8)
+def _kmeans_mais_mais(embs, n, rng, fixos=()):
+    """Sorteia centróides iniciais afastados entre si (k-means++)."""
+    escolhidos = list(fixos)
+    if not escolhidos:
+        escolhidos.append(embs[rng.integers(len(embs))])
+    while len(escolhidos) < n + len(fixos):
+        dist = 1 - np.max(embs @ np.array(escolhidos).T, axis=1)
+        p = np.clip(dist, 0, None) ** 2
+        p = p / p.sum() if p.sum() > 0 else None
+        escolhidos.append(embs[rng.choice(len(embs), p=p)])
+    return _normalizar(np.array(escolhidos))
+
+
+def _normalizar(x):
+    return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-8)
+
+
+def _centroides(embs, rotulos, n, anteriores=None):
+    c = []
+    for k in range(n):
+        if np.any(rotulos == k):
+            c.append(embs[rotulos == k].mean(0))
+        else:
+            c.append(anteriores[k] if anteriores is not None else np.zeros(embs.shape[1]))
+    return _normalizar(np.stack(c))
 
 
 def separar(
@@ -101,7 +136,11 @@ def separar(
     embs_todos = embedder(janelas + janelas_ref)
     embs, embs_ref = embs_todos[: len(janelas)], embs_todos[len(janelas):]
 
-    rotulos_jan = agrupar(embs, n_locutores)
+    ref = None
+    if len(embs_ref):
+        ref = embs_ref.mean(0)
+        ref /= np.linalg.norm(ref) + 1e-8
+    rotulos_jan = agrupar(embs, n_locutores, ref)
     centroides = _centroides(embs, rotulos_jan, n_locutores)
 
     # Cada quadro recebe a média da similaridade das janelas que o cobrem.
@@ -119,10 +158,8 @@ def separar(
     rotulos[~fala] = -1
     rotulos = _suavizar(rotulos, int(min_segmento_s / QUADRO_S))
 
-    alvo, sim_ref, ref = None, None, None
-    if len(embs_ref):
-        ref = embs_ref.mean(0)
-        ref /= np.linalg.norm(ref) + 1e-8
+    alvo, sim_ref = None, None
+    if ref is not None:
         sim_ref = (centroides @ ref).tolist()
         alvo = int(np.argmax(sim_ref))
     return Resultado(rotulos, alvo, sim_ref, centroides, ref, margem)

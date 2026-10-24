@@ -1,6 +1,5 @@
 numpy
 scipy
 soundfile
-scikit-learn
 torch
 speechbrain>=1.0

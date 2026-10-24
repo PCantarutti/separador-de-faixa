@@ -14,18 +14,24 @@ def _exigir_ffmpeg():
         raise RuntimeError("ffmpeg não encontrado. Instale-o e deixe-o no PATH.")
 
 
-def carregar(caminho, sr=None, mono=False):
+def carregar(caminho, sr=None, mono=False, inicio=None, duracao=None):
     """Decodifica qualquer formato suportado pelo ffmpeg.
 
     Retorna (amostras float32 com forma [n, canais], taxa_de_amostragem).
-    Sem `sr`, mantém a taxa original do arquivo.
+    Sem `sr`, mantém a taxa original do arquivo. `inicio` e `duracao` (em
+    segundos) leem só um pedaço do arquivo.
     """
     _exigir_ffmpeg()
     if sr is None:
         sr = _ffprobe(caminho, "sample_rate")
     canais = 1 if mono else _ffprobe(caminho, "channels")
-    cmd = ["ffmpeg", "-v", "error", "-i", str(caminho),
-           "-f", "f32le", "-ar", str(sr), "-ac", str(canais), "-"]
+    cmd = ["ffmpeg", "-v", "error"]
+    if inicio is not None:
+        cmd += ["-ss", f"{inicio:.3f}"]
+    if duracao is not None:
+        cmd += ["-t", f"{duracao:.3f}"]
+    cmd += ["-i", str(caminho), "-vn",
+            "-f", "f32le", "-ar", str(sr), "-ac", str(canais), "-"]
     bruto = subprocess.run(cmd, capture_output=True, check=True).stdout
     dados = np.frombuffer(bruto, dtype=np.float32).reshape(-1, canais)
     return dados.copy(), sr
@@ -46,6 +52,16 @@ def salvar(caminho, dados, sr):
         caminho,
     ]
     subprocess.run(cmd, input=np.ascontiguousarray(dados, dtype=np.float32).tobytes(), check=True)
+
+
+def duracao(caminho):
+    """Duração do arquivo em segundos, segundo o ffprobe."""
+    saida = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(caminho)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    return float(saida) if saida and saida != "N/A" else 0.0
 
 
 def _ffprobe(caminho, campo):

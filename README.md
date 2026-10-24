@@ -9,8 +9,9 @@ exemplo, extrair só a fala de um dos apresentadores de um podcast com duas pess
 2. **Impressão vocal:** o áudio é cortado em janelas de 1,5 s e cada uma vira um vetor
    que descreve o timbre de quem fala (modelo [ECAPA-TDNN](https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb)
    do SpeechBrain, treinado para reconhecer locutores).
-3. **Agrupamento:** as janelas são agrupadas em N locutores (padrão 2) — isso é a
-   *diarização* ("quem fala quando").
+3. **Agrupamento:** as janelas são agrupadas em N locutores (padrão 2) com k-means
+   por similaridade de cosseno — isso é a *diarização* ("quem fala quando"). Com
+   referência, o grupo da pessoa desejada parte da própria referência.
 4. **Escolha do alvo:** se você fornece um trecho de referência com a voz da pessoa,
    o programa escolhe automaticamente o grupo mais parecido com ela.
 5. **Falas sobrepostas (opcional, `-s`):** nos trechos em que as duas pessoas podem
@@ -98,6 +99,7 @@ use `--locutor 0` ou `--locutor 1` para gerar só o que interessa.
 | Opção | Descrição |
 |---|---|
 | `-n 3` | número de pessoas na gravação (padrão 2) |
+| `--trecho 20:00-25:00` | processa só esse pedaço (bom para testar rápido); os tempos de `-r` continuam contando do início do arquivo |
 | `--modo concatenar` | junta só os trechos da pessoa (arquivo mais curto); o padrão `mutar` mantém a duração e silencia os outros, útil para editar em um DAW |
 | `--segmentos` | salva também um `.csv` com os tempos de início/fim de cada fala |
 | `--dispositivo cuda` | usa a GPU (bem mais rápido em episódios longos) |
