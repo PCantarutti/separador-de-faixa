@@ -36,20 +36,41 @@ def voz(duracao, sr, f0, escala_formantes, rng):
     return saida / (np.abs(saida).max() + 1e-9) * 0.5
 
 
-def podcast(sr=16000, turnos=12, semente=0):
-    """Retorna (sinal, verdade_por_quadro_10ms, ref_A, ref_B)."""
+def podcast(sr=16000, turnos=12, semente=0, sobreposicao=False):
+    """Retorna (sinal, verdade_por_quadro_10ms, ref_A, ref_B).
+
+    Com `sobreposicao=True` retorna também (fonte_A, fonte_B) e a pessoa A solta
+    interjeições por cima das falas de B; a verdade marca esses quadros com 2.
+    """
     rng = np.random.default_rng(semente)
     locutores = [(110, 1.0), (210, 1.18)]  # (f0, escala de formantes)
-    partes, verdade = [], []
+    n_total = 0
+    blocos = []  # (quem, início, sinal)
+    verdade = []
     for k in range(turnos):
         quem = k % 2
         dur = rng.uniform(2.0, 5.0)
-        partes.append(voz(dur, sr, *locutores[quem], rng))
-        verdade += [quem] * int(round(dur * 100))
-        pausa = rng.uniform(0.3, 0.8)
-        partes.append(np.zeros(int(pausa * sr)))
-        verdade += [-1] * int(round(pausa * 100))
-    sinal = np.concatenate(partes)
-    sinal += 0.003 * rng.standard_normal(len(sinal))
+        s = voz(dur, sr, *locutores[quem], rng)
+        blocos.append((quem, n_total, s))
+        verdade += [quem] * (len(s) // (sr // 100))
+        n_total += len(s)
+        if sobreposicao and quem == 1:
+            # Interjeição de A no meio da fala de B.
+            ini = n_total - len(s) + int(rng.uniform(0.6, 1.2) * sr)
+            blocos.append((0, ini, voz(rng.uniform(0.6, 0.9), sr, *locutores[0], rng)))
+        pausa = int(rng.uniform(0.3, 0.8) * sr)
+        verdade += [-1] * (pausa // (sr // 100))
+        n_total += pausa
+    fontes = np.zeros((2, n_total))
+    for quem, ini, s in blocos:
+        fontes[quem, ini : ini + len(s)] += s
+    verdade = np.array(verdade[: n_total // (sr // 100)])
+    q = sr // 100
+    if sobreposicao:
+        energia = (fontes[:, : len(verdade) * q].reshape(2, -1, q) ** 2).mean(2) > 1e-4
+        verdade[energia[0] & energia[1]] = 2
+    sinal = fontes.sum(0) + 0.003 * rng.standard_normal(n_total)
     refs = [voz(10, sr, *loc, rng) for loc in locutores]
-    return sinal.astype(np.float32), np.array(verdade), refs
+    if sobreposicao:
+        return sinal.astype(np.float32), verdade, refs, fontes.astype(np.float32)
+    return sinal.astype(np.float32), verdade, refs

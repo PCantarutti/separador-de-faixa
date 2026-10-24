@@ -13,7 +13,11 @@ exemplo, extrair só a fala de um dos apresentadores de um podcast com duas pess
    *diarização* ("quem fala quando").
 4. **Escolha do alvo:** se você fornece um trecho de referência com a voz da pessoa,
    o programa escolhe automaticamente o grupo mais parecido com ela.
-5. **Saída:** gera um áudio em que só a pessoa escolhida aparece, mantendo a qualidade
+5. **Falas sobrepostas (opcional, `-s`):** nos trechos em que as duas pessoas podem
+   estar falando juntas, o [SepFormer](https://huggingface.co/speechbrain/sepformer-whamr16k)
+   divide a mistura em duas vozes; a que tiver a impressão vocal da pessoa escolhida
+   entra na faixa final.
+6. **Saída:** gera um áudio em que só a pessoa escolhida aparece, mantendo a qualidade
    e a taxa de amostragem originais (com *fades* curtos para não haver cliques).
 
 ## Instalação
@@ -50,6 +54,36 @@ Salvo: maria.wav
 
 Pode passar várias referências (`-r a.wav -r b.wav`) para uma impressão vocal mais estável.
 
+### Com um trecho da própria gravação como referência
+
+Em vez de recortar um arquivo, informe o intervalo (início - fim) em que só a pessoa
+desejada fala:
+
+```bash
+python -m separador podcast.mp3 -r 10:00 - 14:45 -o maria.wav
+python -m separador podcast.mp3 -r 10:00-10:30 -r 52:10-52:40   # vários intervalos
+```
+
+Aceita `SS`, `MM:SS` ou `HH:MM:SS` (com decimais, ex.: `1:02:03.5`). O ideal é um
+trecho de 10 a 60 s sem a outra pessoa falando; trechos maiores funcionam, mas quanto
+mais a outra voz aparecer neles, pior fica a identificação.
+
+### Separando falas sobrepostas
+
+```bash
+python -m separador podcast.mp3 -r 10:00 - 14:45 -s
+```
+
+Com `-s`, o SepFormer roda nas trocas de locutor (onde um costuma começar antes do
+outro terminar) e nos 20% de trechos em que a identificação ficou mais ambígua. Para
+recuperar também os "aham"/"sim" ditos no meio da fala do outro, use
+`--sobreposicao-tudo`, que roda o SepFormer em toda a fala — bem mais lento, então
+prefira com GPU (`--dispositivo cuda`).
+
+O modelo (~110 MB) é baixado na primeira vez para `modelos/`. Outros modelos SepFormer
+do SpeechBrain podem ser usados com `--modelo-sobreposicao`, por exemplo
+`speechbrain/sepformer-wsj02mix` (8 kHz, voz limpa).
+
 ### Sem referência
 
 ```bash
@@ -70,19 +104,25 @@ use `--locutor 0` ou `--locutor 1` para gerar só o que interessa.
 | `--min-segmento 0.4` | trocas de locutor mais curtas que isso são ignoradas |
 | `--margem-vad 12` | aumente se ruído de fundo estiver passando como fala; diminua se falas baixas forem cortadas |
 | `--modelo mfcc` | extrator leve e 100% offline, porém bem menos preciso |
+| `-s` / `--sobreposicao-tudo` | separa falas sobrepostas com SepFormer (veja acima) |
+| `--percentil-ambiguo 20` | com `-s`, quanto da fala (os trechos mais ambíguos) vai para o SepFormer |
 
 O formato de saída segue a extensão (`.wav`, `.flac`, `.mp3`, `.m4a`...).
 
 ## Limitações
 
-- **Falas sobrepostas:** quando as duas pessoas falam ao mesmo tempo, o trecho vai
-  inteiro para quem predomina — a voz da outra pessoa aparece junto. Para separar a
-  sobreposição em si seria preciso um modelo de separação de fontes (ex.: SepFormer),
-  o que pode ser adicionado como etapa extra.
+- **Falas sobrepostas sem `-s`:** o trecho vai inteiro para quem predomina — a voz da
+  outra pessoa aparece junto.
+- **Com `-s`:** o modo padrão detecta bem as sobreposições nas trocas de locutor, mas
+  pode deixar passar interjeições curtas no meio da fala do outro; para essas, use
+  `--sobreposicao-tudo`. O SepFormer trabalha em 16 kHz e em mono, então nos trechos
+  separados o som perde agudos acima de 8 kHz e a imagem estéreo, e pode ter leves
+  artefatos.
 - **Vozes muito parecidas** (mesmo gênero, timbre semelhante) podem gerar trocas
   pontuais; uma referência mais longa e limpa ajuda.
-- Interjeições curtas ("aham", "sim") de menos de ~0,4 s tendem a ser absorvidas pela
-  fala de quem está com a palavra.
+- Sem `--sobreposicao-tudo`, interjeições curtas ("aham", "sim") de menos de ~0,4 s
+  tendem a ser absorvidas pela fala de quem está com a palavra.
+- Coloque o arquivo de entrada **antes** das opções (`separador podcast.mp3 -r ...`).
 
 ## Testes
 
@@ -91,4 +131,5 @@ pip install pytest
 python -m pytest
 ```
 
-Os testes usam vozes sintéticas e o extrator `mfcc`, então rodam offline.
+Os testes usam vozes sintéticas, o extrator `mfcc` e um SepFormer simulado, então
+rodam offline.

@@ -55,3 +55,15 @@ def _ffprobe(caminho, campo):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
     return int(saida.split(",")[0])
+
+
+def reamostrar(sinal, sr_de, sr_para):
+    """Reamostra ao longo do último eixo."""
+    if sr_de == sr_para:
+        return sinal
+    from math import gcd
+
+    from scipy.signal import resample_poly
+
+    g = gcd(int(sr_de), int(sr_para))
+    return resample_poly(sinal, sr_para // g, sr_de // g, axis=-1).astype(np.float32)

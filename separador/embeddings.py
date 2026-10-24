@@ -33,13 +33,16 @@ class EmbedderECAPA:
 class EmbedderMFCC:
     """Estatísticas de MFCC. Leve e offline, mas bem menos preciso que o ECAPA.
 
-    Útil para testes ou quando não há como baixar o modelo.
+    Útil para testes ou quando não há como baixar o modelo. A normalização é
+    estimada na primeira chamada (o lote do áudio inteiro) e reaproveitada nas
+    seguintes, para que os vetores continuem comparáveis entre si.
     """
 
     def __init__(self, sr=16000, n_mfcc=20):
         self.sr = sr
         self.n_mfcc = n_mfcc
         self._banco = _banco_mel(sr, n_fft=512, n_mels=40)
+        self._media = self._desvio = None
 
     def __call__(self, janelas):
         embs = []
@@ -47,8 +50,10 @@ class EmbedderMFCC:
             mfcc = self._mfcc(w)
             embs.append(np.concatenate([mfcc.mean(0), mfcc.std(0)]))
         embs = np.array(embs)
-        embs -= embs.mean(0, keepdims=True)
-        embs /= embs.std(0, keepdims=True) + 1e-8
+        if self._media is None:
+            self._media = embs.mean(0, keepdims=True)
+            self._desvio = embs.std(0, keepdims=True) + 1e-8
+        embs = (embs - self._media) / self._desvio
         return _normalizar(embs)
 
     def _mfcc(self, w):

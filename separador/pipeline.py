@@ -13,6 +13,9 @@ class Resultado:
     rotulos: np.ndarray  # por quadro de 10 ms: -1 = silêncio, 0..N-1 = locutor
     alvo: int | None  # índice do locutor escolhido pela referência
     similaridade_ref: list[float] | None  # similaridade de cada locutor com a referência
+    centroides: np.ndarray | None = None  # impressão vocal média de cada locutor
+    ref: np.ndarray | None = None  # impressão vocal da referência
+    margem: np.ndarray | None = None  # por quadro: diferença entre os dois locutores mais prováveis
 
     def segmentos(self, locutor):
         """Lista de (início_s, fim_s) em que `locutor` fala."""
@@ -85,7 +88,7 @@ def separar(
     n_quadros = len(fala)
     janelas, inicios = janelar(sinal, sr, fala, janela_s, passo_s)
     if not janelas:
-        return Resultado(np.full(n_quadros, -1), None, None)
+        return Resultado(np.full(n_quadros, -1), None, None, margem=np.zeros(n_quadros))
 
     janelas_ref = janelas_referencia(referencias or [], sr, janela_s, passo_s)
     # Um único lote garante que a referência e o podcast passem pela mesma normalização.
@@ -104,16 +107,19 @@ def separar(
         pontuacao[ini : ini + q_jan] += s
         cobertura[ini : ini + q_jan] += 1
     rotulos = np.where(cobertura > 0, np.argmax(pontuacao, axis=1), -1)
+    media = pontuacao / np.maximum(cobertura, 1)[:, None]
+    ordenado = np.sort(media, axis=1)
+    margem = ordenado[:, -1] - ordenado[:, -2] if n_locutores > 1 else ordenado[:, -1]
     rotulos[~fala] = -1
     rotulos = _suavizar(rotulos, int(min_segmento_s / QUADRO_S))
 
-    alvo, sim_ref = None, None
+    alvo, sim_ref, ref = None, None, None
     if len(embs_ref):
         ref = embs_ref.mean(0)
         ref /= np.linalg.norm(ref) + 1e-8
         sim_ref = (centroides @ ref).tolist()
         alvo = int(np.argmax(sim_ref))
-    return Resultado(rotulos, alvo, sim_ref)
+    return Resultado(rotulos, alvo, sim_ref, centroides, ref, margem)
 
 
 def _suavizar(rotulos, min_len):

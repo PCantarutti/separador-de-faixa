@@ -6,8 +6,9 @@ from pathlib import Path
 
 import numpy as np
 
-from . import audio, embeddings
+from . import audio, embeddings, sobreposicao
 from .pipeline import mascara_amostras, separar
+from .tempo import ler_intervalo
 
 
 def criar_parser():
@@ -15,9 +16,11 @@ def criar_parser():
         prog="separador",
         description="Isola a voz de um locutor específico em um podcast/gravação.",
     )
-    p.add_argument("entrada", help="arquivo de áudio (mp3, wav, m4a, flac...)")
-    p.add_argument("-r", "--referencia", action="append", default=[],
-                   help="trecho (5-30 s) só com a voz da pessoa desejada; pode repetir")
+    p.add_argument("entrada", nargs="?", help="arquivo de áudio (mp3, wav, m4a, flac...)")
+    p.add_argument("-r", "--referencia", action="append", nargs="+", default=[],
+                   metavar="ARQUIVO|INÍCIO-FIM",
+                   help="voz da pessoa desejada (5-30 s): um arquivo só com ela, ou um "
+                        "intervalo da própria gravação, ex.: -r 10:00-14:45; pode repetir")
     p.add_argument("-n", "--locutores", type=int, default=2,
                    help="quantas pessoas falam na gravação (padrão: 2)")
     p.add_argument("-l", "--locutor", type=int,
@@ -38,21 +41,72 @@ def criar_parser():
                    help="dB acima do ruído de fundo para considerar fala")
     p.add_argument("--segmentos", action="store_true",
                    help="também salva um .csv com os tempos de fala de cada locutor")
+    p.add_argument("-s", "--sobreposicao", action="store_true",
+                   help="separa falas sobrepostas com SepFormer (nas trocas de locutor e "
+                        "nos trechos ambíguos)")
+    p.add_argument("--sobreposicao-tudo", action="store_true",
+                   help="roda o SepFormer em toda a fala, não só nos trechos suspeitos "
+                        "(recupera mais interjeições; lento, recomendado com GPU)")
+    p.add_argument("--modelo-sobreposicao", default=sobreposicao.MODELO_PADRAO,
+                   help="modelo SepFormer do Hugging Face (padrão: %(default)s)")
+    p.add_argument("--percentil-ambiguo", type=float, default=20.0,
+                   help="com -s, %% da fala (os trechos mais ambíguos) enviada ao SepFormer")
     return p
 
 
-def extrair(original, rotulos, locutor, sr, modo):
+def ler_referencias(parser, args, analise, sr):
+    """Converte os valores de -r em sinais (arquivos ou intervalos da entrada)."""
+    sinais = []
+    for grupo in args.referencia:
+        texto = " ".join(grupo)
+        try:
+            intervalo = ler_intervalo(texto)
+        except ValueError as e:
+            parser.error(str(e))
+        if intervalo:
+            ini, fim = intervalo
+            duracao = len(analise) / sr
+            if ini >= duracao:
+                parser.error(f"referência {texto!r} começa depois do fim do áudio "
+                             f"({duracao:.1f} s)")
+            sinais.append(analise[int(ini * sr) : int(fim * sr)])
+            print(f"Referência: trecho {texto} da entrada", file=sys.stderr)
+            continue
+        for item in grupo:
+            if not Path(item).is_file():
+                parser.error(f"referência não encontrada: {item!r} (use um arquivo ou um "
+                             "intervalo como 10:00-14:45)")
+            sinais.append(audio.carregar(item, sr=sr, mono=True)[0][:, 0])
+    return sinais
+
+
+def corrigir_entrada(parser, args):
+    """Permite "separador -r 10:00-14:45 podcast.mp3": o -r engole a entrada."""
+    if args.entrada is None and args.referencia:
+        grupo = args.referencia[-1]
+        if len(grupo) > 1 or not ler_intervalo(grupo[0]):
+            args.entrada = grupo.pop()
+            if not grupo:
+                args.referencia.pop()
+    if args.entrada is None:
+        parser.error("informe o arquivo de áudio de entrada")
+
+
+def extrair(original, rotulos, locutor, sr, modo, separados=None, escolhas=None, sr_analise=None):
     ganho = mascara_amostras(rotulos, locutor, len(original), sr)
+    faixa = original * ganho[:, None]
+    ativo = ganho > 0
+    if separados:
+        faixa, ativo = sobreposicao.aplicar(faixa, ativo, sr, sr_analise, separados, escolhas)
     if modo == "mutar":
-        return original * ganho[:, None]
+        return faixa
     # Concatena com pequenos respiros de silêncio entre os trechos.
     pausa = np.zeros((int(0.25 * sr), original.shape[1]), dtype=original.dtype)
     partes = []
-    ativo = ganho > 0
     m = np.concatenate([[False], ativo, [False]]).astype(np.int8)
     d = np.diff(m)
     for ini, fim in zip(np.flatnonzero(d == 1), np.flatnonzero(d == -1)):
-        partes += [original[ini:fim] * ganho[ini:fim, None], pausa]
+        partes += [faixa[ini:fim], pausa]
     return np.concatenate(partes) if partes else original[:0]
 
 
@@ -62,13 +116,15 @@ def formatar_tempo(s):
     return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 
-def main(argv=None):
-    args = criar_parser().parse_args(argv)
+def main(argv=None, separador=None):
+    parser = criar_parser()
+    args = parser.parse_args(argv)
+    corrigir_entrada(parser, args)
     entrada = Path(args.entrada)
 
     print(f"Carregando {entrada}...", file=sys.stderr)
     analise, sr_a = audio.carregar(entrada, sr=audio.SR_ANALISE, mono=True)
-    refs = [audio.carregar(r, sr=audio.SR_ANALISE, mono=True)[0][:, 0] for r in args.referencia]
+    refs = ler_referencias(parser, args, analise[:, 0], sr_a)
 
     print(f"Carregando modelo '{args.modelo}'...", file=sys.stderr)
     embedder = embeddings.criar(args.modelo, args.dispositivo)
@@ -106,15 +162,43 @@ def main(argv=None):
               file=sys.stderr)
         alvos = list(range(args.locutores))
 
+    separados = []
+    if args.sobreposicao or args.sobreposicao_tudo:
+        modo = "tudo" if args.sobreposicao_tudo else "auto"
+        regioes = sobreposicao.regioes_candidatas(
+            res.rotulos, res.margem, modo, args.percentil_ambiguo)
+        total = sum(f - i for i, f in regioes) * 0.01
+        print(f"Separando falas sobrepostas em {len(regioes)} trechos ({total:.0f} s)...",
+              file=sys.stderr)
+        if separador is None:
+            separador = sobreposicao.SeparadorSepFormer(args.modelo_sobreposicao,
+                                                        args.dispositivo)
+
+        def progresso(i, n):
+            print(f"\r  {i}/{n}", end="" if i < n else "\n", file=sys.stderr)
+
+        separados = sobreposicao.separar_regioes(
+            analise[:, 0], sr_a, regioes, separador, embedder, progresso)
+
     original, sr_o = audio.carregar(entrada)
     for k in alvos:
+        escolhas = None
+        if separados:
+            # A referência, quando existe, descreve melhor o alvo que o centróide do grupo.
+            vetor = res.ref if (k == res.alvo and res.ref is not None) else res.centroides[k]
+            outros = np.delete(res.centroides, k, axis=0)
+            escolhas = sobreposicao.escolher_fontes(separados, vetor, outros)
+            aceitos = sum(j is not None for j in escolhas)
+            print(f"  locutor {k}: voz recuperada em {aceitos} de {len(separados)} trechos "
+                  "sobrepostos", file=sys.stderr)
         if args.saida and len(alvos) == 1:
             destino = Path(args.saida)
         else:
             sufixo = Path(args.saida).suffix if args.saida else ".wav"
             base = Path(args.saida).with_suffix("") if args.saida else entrada.with_suffix("")
             destino = Path(f"{base}_locutor{k}{sufixo}")
-        audio.salvar(destino, extrair(original, res.rotulos, k, sr_o, args.modo), sr_o)
+        faixa = extrair(original, res.rotulos, k, sr_o, args.modo, separados, escolhas, sr_a)
+        audio.salvar(destino, faixa, sr_o)
         print(f"Salvo: {destino}", file=sys.stderr)
 
         if args.segmentos:
