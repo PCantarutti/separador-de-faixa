@@ -91,3 +91,22 @@ def test_trecho_processa_so_um_pedaco(tmp_path):
     v = verdade[1000:3000]
     energia = (out[: len(v) * q] ** 2).reshape(len(v), q).mean(1)
     assert energia[v == 0].mean() > 50 * energia[v == 1].mean()
+
+
+def test_concatenar_com_sobreposicao_remove_silencios(tmp_path):
+    sinal, verdade, refs, fontes = podcast(semente=2, sobreposicao=True)
+    sf.write(tmp_path / "pod.wav", sinal, SR, subtype="FLOAT")
+    sf.write(tmp_path / "ref.wav", refs[0], SR)
+    saida = tmp_path / "a.wav"
+    cli.main([str(tmp_path / "pod.wav"), "-r", str(tmp_path / "ref.wav"), "-o", str(saida),
+              "--modelo", "mfcc", "--sobreposicao-tudo", "--modo", "concatenar",
+              "--pausa", "0.1"], separador=SeparadorPerfeito(sinal, fontes))
+    out = sf.read(saida)[0]
+    fala_a = np.sum((verdade == 0) | (verdade == 2)) / 100
+    # Só a fala de A (incluindo as interjeições) + pausas curtas, sem os turnos de B.
+    assert fala_a * 0.9 < len(out) / SR < fala_a + 4
+    q = SR // 100
+    n = len(out) // q
+    db = 10 * np.log10((out[: n * q].reshape(n, q) ** 2).mean(1) + 1e-12)
+    assert max(len(x) for x in np.split(db < -50, np.flatnonzero(np.diff(db < -50)) + 1)
+               if x[0]) <= 40  # nenhum silêncio maior que ~0,4 s

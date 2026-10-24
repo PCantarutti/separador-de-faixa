@@ -100,7 +100,8 @@ use `--locutor 0` ou `--locutor 1` para gerar só o que interessa.
 |---|---|
 | `-n 3` | número de pessoas na gravação (padrão 2) |
 | `--trecho 20:00-25:00` | processa só esse pedaço (bom para testar rápido); os tempos de `-r` continuam contando do início do arquivo |
-| `--modo concatenar` | junta só os trechos da pessoa (arquivo mais curto); o padrão `mutar` mantém a duração e silencia os outros, útil para editar em um DAW |
+| `--modo concatenar` | junta só os trechos da pessoa, sem os espaços em branco (arquivo mais curto); o padrão `mutar` mantém a duração e silencia os outros, útil para editar em um DAW |
+| `--pausa 0.25` | no modo `concatenar`, silêncio entre uma fala e outra (0 cola as falas) |
 | `--segmentos` | salva também um `.csv` com os tempos de início/fim de cada fala |
 | `--dispositivo cuda` | usa a GPU (bem mais rápido em episódios longos) |
 | `--min-segmento 0.4` | trocas de locutor mais curtas que isso são ignoradas |

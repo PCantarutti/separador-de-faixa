@@ -34,6 +34,9 @@ def criar_parser():
     p.add_argument("--modo", choices=["mutar", "concatenar"], default="mutar",
                    help="mutar: mantém a duração e silencia os outros (padrão); "
                         "concatenar: junta só os trechos da pessoa")
+    p.add_argument("--pausa", type=float, default=0.25,
+                   help="no modo concatenar, silêncio (s) entre uma fala e outra "
+                        "(padrão: %(default)s; 0 cola as falas)")
     p.add_argument("--modelo", choices=["ecapa", "mfcc"], default="ecapa",
                    help="extrator de voz: ecapa (preciso, padrão) ou mfcc (leve, offline)")
     p.add_argument("--dispositivo", default="cpu", help="cpu ou cuda")
@@ -101,7 +104,8 @@ def corrigir_entrada(parser, args):
         parser.error("informe o arquivo de áudio de entrada")
 
 
-def extrair(original, rotulos, locutor, sr, modo, separados=None, escolhas=None, sr_analise=None):
+def extrair(original, rotulos, locutor, sr, modo, separados=None, escolhas=None, sr_analise=None,
+            pausa_s=0.25):
     ganho = mascara_amostras(rotulos, locutor, len(original), sr)
     faixa = original * ganho[:, None]
     ativo = ganho > 0
@@ -110,7 +114,7 @@ def extrair(original, rotulos, locutor, sr, modo, separados=None, escolhas=None,
     if modo == "mutar":
         return faixa
     # Concatena com pequenos respiros de silêncio entre os trechos.
-    pausa = np.zeros((int(0.25 * sr), original.shape[1]), dtype=original.dtype)
+    pausa = np.zeros((int(pausa_s * sr), original.shape[1]), dtype=original.dtype)
     partes = []
     m = np.concatenate([[False], ativo, [False]]).astype(np.int8)
     d = np.diff(m)
@@ -217,8 +221,12 @@ def main(argv=None, separador=None):
             sufixo = Path(args.saida).suffix if args.saida else ".wav"
             base = Path(args.saida).with_suffix("") if args.saida else entrada.with_suffix("")
             destino = Path(f"{base}_locutor{k}{sufixo}")
-        faixa = extrair(original, res.rotulos, k, sr_o, args.modo, separados, escolhas, sr_a)
+        faixa = extrair(original, res.rotulos, k, sr_o, args.modo, separados, escolhas, sr_a,
+                        args.pausa)
         audio.salvar(destino, faixa, sr_o)
+        if args.modo == "concatenar":
+            print(f"  duração: {len(faixa) / sr_o / 60:.1f} min "
+                  f"(original: {len(original) / sr_o / 60:.1f} min)", file=sys.stderr)
         print(f"Salvo: {destino.resolve()}", file=sys.stderr)
 
         if args.segmentos:

@@ -141,8 +141,24 @@ def aplicar(faixa, ativo, sr_saida, sr_analise, trechos_sep, escolhas, fade_s=0.
             peso[: len(rampa)] = rampa
             peso[n - len(rampa) :] = rampa[::-1]
         faixa[a : a + n] = faixa[a : a + n] * (1 - peso)[:, None] + (fonte[:n] * peso)[:, None]
-        ativo[a : a + n] = True
+        ativo[a : a + n] |= _tem_voz(fonte[:n], sr_saida)
     return faixa, ativo
+
+
+def _tem_voz(fonte, sr, abaixo_do_pico_db=35.0, min_pausa_s=0.3):
+    """Marca as amostras em que a fonte separada tem voz (o resto é resíduo/silêncio)."""
+    q = int(sr * QUADRO_S)
+    n = len(fonte) // q
+    if n == 0:
+        return np.zeros(len(fonte), dtype=bool)
+    db = 10 * np.log10((fonte[: n * q].reshape(n, q) ** 2).mean(1) + 1e-12)
+    voz = db > max(db.max() - abaixo_do_pico_db, -60.0)
+    # Não corta pausas curtas no meio de uma frase.
+    for a, b in trechos(~voz):
+        if b - a <= int(min_pausa_s / QUADRO_S) and a > 0 and b < n:
+            voz[a:b] = True
+    voz = np.repeat(voz, q)
+    return np.pad(voz, (0, len(fonte) - len(voz)), constant_values=bool(voz[-1]))
 
 
 def _ajustar(x, n):
