@@ -110,7 +110,8 @@ def extrair(original, rotulos, locutor, sr, modo, separados=None, escolhas=None,
     faixa = original * ganho[:, None]
     ativo = ganho > 0
     if separados:
-        faixa, ativo = sobreposicao.aplicar(faixa, ativo, sr, sr_analise, separados, escolhas)
+        faixa, ativo = sobreposicao.aplicar(faixa, ativo, original, sr, sr_analise,
+                                            separados, escolhas)
     if modo == "mutar":
         return faixa
     # Concatena com pequenos respiros de silêncio entre os trechos.

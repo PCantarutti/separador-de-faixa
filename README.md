@@ -16,8 +16,10 @@ exemplo, extrair só a fala de um dos apresentadores de um podcast com duas pess
    o programa escolhe automaticamente o grupo mais parecido com ela.
 5. **Falas sobrepostas (opcional, `-s`):** nos trechos em que as duas pessoas podem
    estar falando juntas, o [SepFormer](https://huggingface.co/speechbrain/sepformer-whamr16k)
-   divide a mistura em duas vozes; a que tiver a impressão vocal da pessoa escolhida
-   entra na faixa final.
+   divide a mistura em duas vozes. A que tiver a impressão vocal da pessoa escolhida
+   vira uma máscara aplicada ao áudio original: o som real da pessoa é mantido e só
+   os componentes da outra voz são removidos (o áudio gerado pelo SepFormer em si,
+   que tem artefatos, não vai para a saída).
 6. **Saída:** gera um áudio em que só a pessoa escolhida aparece, mantendo a qualidade
    e a taxa de amostragem originais (com *fades* curtos para não haver cliques).
 
@@ -118,9 +120,9 @@ O formato de saída segue a extensão (`.wav`, `.flac`, `.mp3`, `.m4a`...).
   outra pessoa aparece junto.
 - **Com `-s`:** o modo padrão detecta bem as sobreposições nas trocas de locutor, mas
   pode deixar passar interjeições curtas no meio da fala do outro; para essas, use
-  `--sobreposicao-tudo`. O SepFormer trabalha em 16 kHz e em mono, então nos trechos
-  separados o som perde agudos acima de 8 kHz e a imagem estéreo, e pode ter leves
-  artefatos.
+  `--sobreposicao-tudo`. Nos momentos de fala simultânea pode sobrar um resto baixo
+  da outra voz ou um leve chiado; acima de 8 kHz a máscara é estimada a partir da
+  faixa de 4–8 kHz, então a remoção nos agudos é menos precisa.
 - **Vozes muito parecidas** (mesmo gênero, timbre semelhante) podem gerar trocas
   pontuais; uma referência mais longa e limpa ajuda.
 - Sem `--sobreposicao-tudo`, interjeições curtas ("aham", "sim") de menos de ~0,4 s

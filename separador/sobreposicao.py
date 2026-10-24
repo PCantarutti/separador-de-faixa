@@ -123,26 +123,68 @@ def escolher_fontes(trechos_sep, alvo, outros, min_energia=0.05):
     return escolhas
 
 
-def aplicar(faixa, ativo, sr_saida, sr_analise, trechos_sep, escolhas, fade_s=0.02):
-    """Substitui os trechos aceitos da faixa pela fonte separada (com crossfade)."""
+def aplicar(faixa, ativo, original, sr_saida, sr_analise, trechos_sep, escolhas, fade_s=0.02):
+    """Nos trechos aceitos, filtra o áudio original com uma máscara tirada do SepFormer.
+
+    O áudio gerado pelo SepFormer tem artefatos (voz metálica/"robótica"); usar só a
+    proporção entre as fontes como máscara sobre o original preserva o som real da
+    pessoa, os agudos e o estéreo, e remove apenas o que pertence à outra voz.
+    """
     q = int(sr_saida * QUADRO_S)
     n_fade = max(1, int(sr_saida * fade_s))
     for t, j in zip(trechos_sep, escolhas):
         if j is None:
             continue
         a = t.ini * q
-        fonte = reamostrar(t.fontes[j], sr_analise, sr_saida)
-        n = min(len(fonte), len(faixa) - a, (t.fim - t.ini) * q)
+        n = min(len(faixa) - a, (t.fim - t.ini) * q)
         if n <= 0:
             continue
+        outras = np.delete(t.fontes, j, axis=0).sum(0)
+        filtrado = _filtrar(original[a : a + n], sr_saida, t.fontes[j], outras, sr_analise)
         peso = np.ones(n, dtype=np.float32)
         rampa = np.linspace(0, 1, min(n_fade, n // 2), dtype=np.float32)
         if len(rampa):
             peso[: len(rampa)] = rampa
             peso[n - len(rampa) :] = rampa[::-1]
-        faixa[a : a + n] = faixa[a : a + n] * (1 - peso)[:, None] + (fonte[:n] * peso)[:, None]
-        ativo[a : a + n] |= _tem_voz(fonte[:n], sr_saida)
+        faixa[a : a + n] = faixa[a : a + n] * (1 - peso)[:, None] + filtrado * peso[:, None]
+        ativo[a : a + n] |= _tem_voz(filtrado.mean(1), sr_saida)
     return faixa, ativo
+
+
+def _filtrar(trecho, sr, alvo, outras, sr_analise, janela_s=0.032, passo_s=0.008):
+    """Aplica ao `trecho` original ([n, canais], taxa `sr`) a máscara de Wiener
+    |alvo|² / (|alvo|² + |outras|²), calculada na taxa de análise."""
+    from scipy.ndimage import uniform_filter
+    from scipy.signal import istft, stft
+
+    def espectro(x, taxa):
+        nper = int(round(janela_s * taxa))
+        return stft(x, taxa, nperseg=nper, noverlap=nper - int(round(passo_s * taxa)),
+                    axis=-1)
+
+    _, _, a_ = espectro(alvo, sr_analise)
+    freqs_a, tempos_a, o_ = espectro(outras, sr_analise)
+    pa, po = np.abs(a_) ** 2, np.abs(o_) ** 2
+    # Suaviza levemente para evitar "ruído musical" (chiados intermitentes).
+    mascara = uniform_filter(pa, 3) / (uniform_filter(pa, 3) + uniform_filter(po, 3) + 1e-10)
+
+    freqs, tempos, x = espectro(trecho.T, sr)  # x: [canais, freqs, tempos]
+    # Leva a máscara para a grade de frequência/tempo do áudio original. Acima do
+    # limite da análise usa a média da faixa mais aguda disponível.
+    idx_t = np.clip(np.searchsorted(tempos_a, tempos), 0, len(tempos_a) - 1)
+    m = mascara[:, idx_t]
+    agudos = m[freqs_a >= freqs_a[-1] / 2].mean(0)
+    m_saida = np.empty((len(freqs), len(tempos)))
+    for i, f in enumerate(freqs):
+        m_saida[i] = agudos if f > freqs_a[-1] else m[np.argmin(np.abs(freqs_a - f))]
+
+    nper = int(round(janela_s * sr))
+    _, y = istft(x * m_saida[None], sr, nperseg=nper,
+                 noverlap=nper - int(round(passo_s * sr)), time_axis=-1, freq_axis=-2)
+    y = y[:, : len(trecho)]
+    if y.shape[1] < len(trecho):
+        y = np.pad(y, ((0, 0), (0, len(trecho) - y.shape[1])))
+    return y.T.astype(np.float32)
 
 
 def _tem_voz(fonte, sr, abaixo_do_pico_db=35.0, min_pausa_s=0.3):
