@@ -1,5 +1,7 @@
 """Extratores de "impressão vocal" (embeddings de locutor)."""
 
+import sys
+
 import numpy as np
 
 
@@ -25,11 +27,16 @@ class EmbedderECAPA:
 
     def __call__(self, janelas, lote=32):
         saidas = []
+        mostrar = len(janelas) > 10 * lote
         with self._torch.no_grad():
             for i in range(0, len(janelas), lote):
                 x = self._torch.from_numpy(np.stack(janelas[i : i + lote]))
                 emb = self.modelo.encode_batch(x).squeeze(1).cpu().numpy()
                 saidas.append(emb)
+                if mostrar:
+                    feito = min(i + lote, len(janelas))
+                    print(f"\r  analisando vozes: {100 * feito // len(janelas)}%",
+                          end="\n" if feito == len(janelas) else "", file=sys.stderr)
         return _normalizar(np.concatenate(saidas))
 
 

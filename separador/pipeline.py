@@ -56,13 +56,19 @@ def janelas_referencia(sinais, sr, janela_s, passo_s):
     return todas
 
 
-def agrupar(embs, n_locutores):
+def agrupar(embs, n_locutores, max_janelas=4000, semente=0):
     if len(embs) < n_locutores:
         return np.zeros(len(embs), dtype=int)
+    # O agrupamento hierárquico usa memória quadrática; em episódios longos ele roda
+    # numa amostra e as demais janelas vão para o centróide mais próximo.
+    amostra = embs
+    if len(embs) > max_janelas:
+        idx = np.random.default_rng(semente).choice(len(embs), max_janelas, replace=False)
+        amostra = embs[idx]
     modelo = AgglomerativeClustering(n_clusters=n_locutores, metric="cosine", linkage="average")
-    rotulos = modelo.fit_predict(embs)
+    rotulos = modelo.fit_predict(amostra)
     # Uma passada de refinamento estilo k-means com os centróides obtidos.
-    centroides = _centroides(embs, rotulos, n_locutores)
+    centroides = _centroides(amostra, rotulos, n_locutores)
     return np.argmax(embs @ centroides.T, axis=1)
 
 

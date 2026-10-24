@@ -52,3 +52,16 @@ def test_cli_ponta_a_ponta(tmp_path, monkeypatch):
     energia = lambda m: np.mean(quadros[m] ** 2)
     assert energia(v == 1) > 50 * energia(v == 0)
     assert (tmp_path / "so_b.csv").read_text().startswith("inicio,fim")
+
+
+def test_agrupar_episodio_longo_usa_amostra():
+    from separador.pipeline import agrupar
+
+    rng = np.random.default_rng(0)
+    centros = rng.standard_normal((2, 192))
+    quem = rng.integers(0, 2, 20000)
+    embs = centros[quem] + 0.8 * rng.standard_normal((20000, 192))
+    embs /= np.linalg.norm(embs, axis=1, keepdims=True)
+    rotulos = agrupar(embs, 2)
+    acerto = max(np.mean(rotulos == quem), np.mean(rotulos != quem))
+    assert acerto > 0.99
