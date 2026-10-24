@@ -12,12 +12,15 @@ class EmbedderECAPA:
     def __init__(self, dispositivo="cpu", pasta_modelo="modelos/ecapa"):
         import torch
         from speechbrain.inference.speaker import EncoderClassifier
+        from speechbrain.utils.fetching import LocalStrategy
 
         self._torch = torch
         self.modelo = EncoderClassifier.from_hparams(
             source="speechbrain/spkrec-ecapa-voxceleb",
             savedir=pasta_modelo,
             run_opts={"device": dispositivo},
+            # Copia em vez de criar symlinks, que no Windows exigem administrador.
+            local_strategy=LocalStrategy.COPY_SKIP_CACHE,
         )
 
     def __call__(self, janelas, lote=32):

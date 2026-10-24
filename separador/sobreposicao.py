@@ -22,12 +22,15 @@ class SeparadorSepFormer:
     def __init__(self, fonte=MODELO_PADRAO, dispositivo="cpu"):
         import torch
         from speechbrain.inference.separation import SepformerSeparation
+        from speechbrain.utils.fetching import LocalStrategy
 
         self._torch = torch
         self.modelo = SepformerSeparation.from_hparams(
             source=fonte,
             savedir=f"modelos/{fonte.rsplit('/', 1)[-1]}",
             run_opts={"device": dispositivo},
+            # Copia em vez de criar symlinks, que no Windows exigem administrador.
+            local_strategy=LocalStrategy.COPY_SKIP_CACHE,
         )
         self.sr = int(self.modelo.hparams.sample_rate)
 
