@@ -199,7 +199,7 @@ def main(argv=None, separador=None):
             destino = Path(f"{base}_locutor{k}{sufixo}")
         faixa = extrair(original, res.rotulos, k, sr_o, args.modo, separados, escolhas, sr_a)
         audio.salvar(destino, faixa, sr_o)
-        print(f"Salvo: {destino}", file=sys.stderr)
+        print(f"Salvo: {destino.resolve()}", file=sys.stderr)
 
         if args.segmentos:
             csv = destino.with_suffix(".csv")
@@ -207,7 +207,7 @@ def main(argv=None, separador=None):
                 f.write("inicio,fim,inicio_s,fim_s\n")
                 for i, fim in res.segmentos(k):
                     f.write(f"{formatar_tempo(i)},{formatar_tempo(fim)},{i:.2f},{fim:.2f}\n")
-            print(f"Salvo: {csv}", file=sys.stderr)
+            print(f"Salvo: {csv.resolve()}", file=sys.stderr)
     return 0
 
 
